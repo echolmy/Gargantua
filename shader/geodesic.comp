@@ -1,0 +1,10 @@
+#version 430
+layout(local_size_x=16, local_size_y=16) in;
+layout(rgba16f, binding = 0) uniform writeonly image2D img;
+void main() {
+    ivec2 p = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 sz = imageSize(img);
+    if (p.x >= sz.x || p.y >= sz.y) return;
+    vec2 uv = vec2(p) / vec2(sz - 1);
+    imageStore(img, p, vec4(uv, 0.5, 1.0)); // 简单渐变
+}
