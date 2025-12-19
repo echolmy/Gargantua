@@ -19,6 +19,7 @@ layout(std140, binding = 3) uniform Objects {
     float  mass[16]; 
 } objs;
 
+uniform samplerCube skybox;
 
 const float rs = 1.269e10;
 const float D_LAMBDA = 1e7;
@@ -80,27 +81,48 @@ void geodesicRHS(Ray ray, out vec3 d1, out vec3 d2) {
 }
 
 void rk4Step(inout Ray ray, float dL) {
-    // RK2 (midpoint) integration for better stability near the horizon.
     vec3 k1a, k1b;
     geodesicRHS(ray, k1a, k1b);
 
-    Ray mid = ray;
-    mid.r      += 0.5 * dL * k1a.x;
-    mid.theta  += 0.5 * dL * k1a.y;
-    mid.phi    += 0.5 * dL * k1a.z;
-    mid.dr     += 0.5 * dL * k1b.x;
-    mid.dtheta += 0.5 * dL * k1b.y;
-    mid.dphi   += 0.5 * dL * k1b.z;
+    Ray r2 = ray;
+    r2.r      += 0.5 * dL * k1a.x;
+    r2.theta  += 0.5 * dL * k1a.y;
+    r2.phi    += 0.5 * dL * k1a.z;
+    r2.dr     += 0.5 * dL * k1b.x;
+    r2.dtheta += 0.5 * dL * k1b.y;
+    r2.dphi   += 0.5 * dL * k1b.z;
 
     vec3 k2a, k2b;
-    geodesicRHS(mid, k2a, k2b);
+    geodesicRHS(r2, k2a, k2b);
 
-    ray.r      += dL * k2a.x;
-    ray.theta  += dL * k2a.y;
-    ray.phi    += dL * k2a.z;
-    ray.dr     += dL * k2b.x;
-    ray.dtheta += dL * k2b.y;
-    ray.dphi   += dL * k2b.z;
+    Ray r3 = ray;
+    r3.r      += 0.5 * dL * k2a.x;
+    r3.theta  += 0.5 * dL * k2a.y;
+    r3.phi    += 0.5 * dL * k2a.z;
+    r3.dr     += 0.5 * dL * k2b.x;
+    r3.dtheta += 0.5 * dL * k2b.y;
+    r3.dphi   += 0.5 * dL * k2b.z;
+
+    vec3 k3a, k3b;
+    geodesicRHS(r3, k3a, k3b);
+
+    Ray r4 = ray;
+    r4.r      += dL * k3a.x;
+    r4.theta  += dL * k3a.y;
+    r4.phi    += dL * k3a.z;
+    r4.dr     += dL * k3b.x;
+    r4.dtheta += dL * k3b.y;
+    r4.dphi   += dL * k3b.z;
+
+    vec3 k4a, k4b;
+    geodesicRHS(r4, k4a, k4b);
+
+    ray.r      += dL * (k1a.x + 2.0 * k2a.x + 2.0 * k3a.x + k4a.x) / 6.0;
+    ray.theta  += dL * (k1a.y + 2.0 * k2a.y + 2.0 * k3a.y + k4a.y) / 6.0;
+    ray.phi    += dL * (k1a.z + 2.0 * k2a.z + 2.0 * k3a.z + k4a.z) / 6.0;
+    ray.dr     += dL * (k1b.x + 2.0 * k2b.x + 2.0 * k3b.x + k4b.x) / 6.0;
+    ray.dtheta += dL * (k1b.y + 2.0 * k2b.y + 2.0 * k3b.y + k4b.y) / 6.0;
+    ray.dphi   += dL * (k1b.z + 2.0 * k2b.z + 2.0 * k3b.z + k4b.z) / 6.0;
 
     ray.x = ray.r * sin(ray.theta) * cos(ray.phi);
     ray.y = ray.r * sin(ray.theta) * sin(ray.phi);
@@ -125,6 +147,10 @@ void main() {
     vec3 dir = normalize(cam.camForward + v * cam.camUp + u * cam.camRight);
     Ray ray = initRay(cam.camPos, dir);
 
+    // Cubemap Sampler
+    vec3 dirToSample; // Light escape direction
+    vec3 bg;
+
     vec4 color = vec4(0.0); // background color
     vec3 prevPos = vec3(ray.x, ray.y, ray.z);
     float lambda = 0.0;
@@ -134,7 +160,7 @@ void main() {
     bool hitDisk = false;
     bool hitObject = false;
 
-    int steps = 20000;
+    int steps = 6000;
 
     for (int i = 0; i < steps; ++i) {
         if (intercept(ray, rs)){
@@ -146,7 +172,10 @@ void main() {
         if (ray.r > ESCAPE_R) break;
     }
 
-    vec4 coll = hitBlackHole ? vec4(0,0,0,1) : vec4(0.1, 0.1, 0.2, 1.0);
-    imageStore(outImage, pix, coll);
+    dirToSample = normalize(vec3(ray.x, ray.y, ray.z)); // 逃逸方向近似
+    bg = texture(skybox, dirToSample).rgb;
+
+    color = hitBlackHole ? vec4(1,0,0,1) : vec4(bg, 1.0);
+    imageStore(outImage, pix, color);
 
 }

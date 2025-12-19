@@ -28,7 +28,8 @@
 #include <glm/gtc/type_ptr.hpp>
 #include <glm/gtx/euler_angles.hpp>
 #include <imgui.h>
-
+#define STB_IMAGE_IMPLEMENTATION
+#include <stb_image.h>
 // #include "GLDebugMessageCallback.h"
 // #include "imgui_impl_glfw.h"
 // #include "imgui_impl_opengl3.h"
@@ -96,9 +97,12 @@ public:
     float panSpeed = 0.01f;
     double zoomSpeed = 25e9f;
 
+    // Mouse operation
     bool dragging = false;
     bool panning = false;
+    bool scrolling = false;
     bool moving = false; // For compute shader optimization
+
     double lastX = 0.0, lastY = 0.0;
 
     // Calculate camera position in world space
@@ -116,14 +120,8 @@ public:
     {
         // Always keep target at black hole center
         target = glm::vec3(0.0f, 0.0f, 0.0f);
-        if (dragging | panning)
-        {
-            moving = true;
-        }
-        else
-        {
-            moving = false;
-        }
+        moving = dragging || panning || scrolling;
+        scrolling = false;
     }
 
     void processMouseMove(double x, double y)
@@ -182,6 +180,7 @@ public:
     {
         radius -= yoffset * zoomSpeed;
         radius = glm::clamp(radius, minRadius, maxRadius);
+        scrolling = true;
         update();
     }
 
@@ -239,6 +238,7 @@ public:
     GLFWwindow *window;
     GLuint quadVAO;
     GLuint texture; // the actual image to write onto
+    GLuint skyboxTex;
     GLuint shaderProgram;
     GLuint computeProgram = 0;
 
@@ -292,6 +292,10 @@ public:
         std::cout << "OpenGL " << glGetString(GL_VERSION) << std::endl;
 
         this->shaderProgram = CreateShaderProgram();
+
+        // Load skybox
+        auto cubemapPath = GetExecutableDir() + "/assets/skybox";
+        skyboxTex = LoadCubemap(cubemapPath);
 
         auto compPath = GetExecutableDir() + "/shader/geodesic.comp";
         this->computeProgram = CreateComputeProgram(compPath);
@@ -577,15 +581,18 @@ public:
     void dispatchCompute(const Camera &cam)
     {
         // determine target compute‐res
-        // int cw = cam.moving ? 200 : WIDTH;
-        // int ch = cam.moving ? 150 : HEIGHT;
-        int cw = WIDTH;
-        int ch = HEIGHT;
+        int cw = cam.moving ? WIDTH / 3 : WIDTH;
+        int ch = cam.moving ? HEIGHT / 3 : HEIGHT;
 
-        // 1. reallocate the texture if needed
-        glBindTexture(GL_TEXTURE_2D, texture);
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA32F, cw, ch, 0, GL_RGBA, GL_FLOAT, nullptr);
-
+        // 1. reallocate the texture if needed (given pixel changed dynamically)
+        static int lastW = 0, lastH = 0;
+        if (cw != lastW || ch != lastH)
+        {
+            glBindTexture(GL_TEXTURE_2D, texture);
+            glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA32F, cw, ch, 0, GL_RGBA, GL_FLOAT, nullptr);
+            lastW = cw;
+            lastH = ch;
+        }
         // 2. Bind UBOs
         glUseProgram(computeProgram);
         uploadCameraUBO(cam);
@@ -594,6 +601,11 @@ public:
 
         // 3. Bind texture as image0
         glBindImageTexture(0, texture, 0, GL_FALSE, 0, GL_WRITE_ONLY, GL_RGBA32F);
+
+        // 3.1 Bind skybox cubemap
+        glActiveTexture(GL_TEXTURE0);
+        glBindTexture(GL_TEXTURE_CUBE_MAP, skyboxTex);
+        glUniform1i(glGetUniformLocation(computeProgram, "skybox"), 0);
 
         // 4. Dispatch grid (work groups)
         GLuint groupsX = (GLuint)std::ceil(cw / 16.0f);
@@ -606,6 +618,43 @@ public:
 
     // void drawGrid(const glm::mat4 &viewProj);
     // void generateGrid(const std::vector<ObjectData> &objects);
+    GLuint LoadCubemap(const std::string &cubemapDir)
+    {
+        const std::vector<std::string> faces = {"right", "left", "top", "bottom", "front", "back"};
+        GLuint cubemapID;
+        glGenTextures(1, &cubemapID);
+        glBindTexture(GL_TEXTURE_CUBE_MAP, cubemapID);
+
+        int w, h, channels;
+        stbi_set_flip_vertically_on_load(false);
+        for (GLuint i = 0; i < faces.size(); i++)
+        {
+            const std::string facePath = cubemapDir + "/" + faces[i] + ".png";
+            unsigned char *data = stbi_load(facePath.c_str(), &w, &h, &channels, 0);
+            if (data)
+            {
+                GLenum format = (channels == 4) ? GL_RGBA : GL_RGB;
+                GLenum internalFormat = (channels == 4) ? GL_SRGB8_ALPHA8 : GL_SRGB8;
+                glTexImage2D(GL_TEXTURE_CUBE_MAP_POSITIVE_X + i, 0, internalFormat, w,
+                             h, 0, format, GL_UNSIGNED_BYTE, data);
+                stbi_image_free(data);
+            }
+            else
+            {
+                std::cout << "Cubemap texture failed to load at path: "
+                          << facePath << std::endl;
+                stbi_image_free(data);
+            }
+        }
+
+        glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_WRAP_R, GL_CLAMP_TO_EDGE);
+
+        return cubemapID;
+    }
 };
 
 void setupCameraCallbacks(GLFWwindow *window, Camera *camera)
@@ -650,6 +699,7 @@ int main(int, char **)
 
     while (!glfwWindowShouldClose(engine.window))
     {
+        camera.update();
         glViewport(0, 0, engine.WIDTH, engine.HEIGHT);
         glClearColor(0.f, 0.f, 0.f, 1.f);
         glClear(GL_COLOR_BUFFER_BIT);
