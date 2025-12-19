@@ -38,6 +38,8 @@
 
 static float mouseX, mouseY;
 bool Gravity = false;
+double G = 6.67430e-11; // Newtonian constant of gravitation
+double c = 299792458.0; // speed of light
 static const float kPi = glm::pi<float>();
 
 static std::string GetExecutableDir()
@@ -193,6 +195,19 @@ public:
     }
 };
 
+class BlackHole
+{
+public:
+    BlackHole(const glm::vec3 &pos, double m) : position(pos), mass(m), radius(0.0) { r_s = 2.0 * G * mass / (c * c); };
+    BlackHole() = default;
+
+    glm::vec3 position;
+    double mass;
+    double radius;
+    double r_s; // Schwarzschild radius
+};
+BlackHole BH(glm::vec3(0.0f, 0.0f, 0.0f), 8.54e36); // A black hole instance
+
 struct ObjectData
 {
     glm::vec4 posRadius; // xyz = position, w = radius
@@ -201,14 +216,11 @@ struct ObjectData
     glm::vec3 velocity = glm::vec3(0.0f, 0.0f, 0.0f); // Initial velocity
 };
 
-class BlackHole
-{
-    glm::vec3 position;
-    double mass;
-    double radius;
-    double r_s;
-};
+std::vector<ObjectData> objects = {
+    {glm::vec4(4e11f, 0.0f, 0.0f, 4e10f), glm::vec4(1, 0.5, 0, 1), 1.98892e30},
+    {glm::vec4(0.0f, 0.0f, 0.0f, BH.r_s), glm::vec4(0, 0, 0, 1), static_cast<float>(BH.mass)},
 
+};
 // void mouseCallback(GLFWwindow *window, double x, double y)
 // {
 //     static float lastX = 400.0f;
@@ -226,7 +238,7 @@ class Engine
 public:
     GLFWwindow *window;
     GLuint quadVAO;
-    GLuint texture;
+    GLuint texture; // the actual image to write onto
     GLuint shaderProgram;
     GLuint computeProgram = 0;
 
@@ -238,12 +250,15 @@ public:
     int WIDTH = 1920;
     int HEIGHT = 1080;
 
+    /// Creates an empty engine; GL resources are allocated later via init().
     Engine() = default;
+    /// Releases resources on destruction by delegating to shutdown().
     ~Engine()
     {
         shutdown();
     }
 
+    /// Initializes windowing, GL context, shaders, UBOs, and fullscreen quad resources.
     bool init()
     {
         if (!glfwInit())
@@ -308,6 +323,7 @@ public:
         return true;
     }
 
+    /// Destroys GL buffers, programs, and the GLFW window before terminating GLFW.
     void shutdown()
     {
         if (objectsUBO)
@@ -332,6 +348,7 @@ public:
         glfwTerminate();
     }
 
+    /// Builds and links the vertex and fragment shaders used for the fullscreen quad blit.
     GLuint CreateShaderProgram()
     {
         const char *vertexShaderSource = R"(
@@ -374,6 +391,7 @@ public:
         return program;
     }
 
+    /// Loads the compute shader from disk, compiles it, and links a compute program or exits on error.
     GLuint CreateComputeProgram(const std::string &filePath)
     {
         // 1. Read GLSL file
@@ -421,6 +439,85 @@ public:
         return cp;
     }
 
+    void uploadCameraUBO(const Camera &cam)
+    {
+        // 16B align
+        struct UBOData
+        {
+            // camera position (world space). The ORIGIN of the ray
+            glm::vec3 pos;
+            float _pad0;
+            glm::vec3 right;
+            float _pad1; // right vector
+            glm::vec3 up;
+            float _pad2; // up vector
+            glm::vec3 forward;
+            float _pad3; // forward vector, view direction
+            float tanHalfFov;
+            float aspect;
+            bool moving;
+            int _pad4;
+        } data;
+
+        // Determine camera pose in the world space
+        glm::vec3 fwd = glm::normalize(cam.target - cam.position());
+        glm::vec3 up = glm::vec3(0, 1, 0); // y axis is up, so disk is in x-z plane
+        glm::vec3 right = normalize(cross(fwd, up));
+        up = glm::cross(right, fwd);
+
+        data.pos = cam.position();
+        data.right = right;
+        data.up = up;
+        data.forward = fwd;
+        data.tanHalfFov = tan(glm::radians(60.0f * 0.5f));
+        data.aspect = float(WIDTH) / float(HEIGHT);
+        data.moving = cam.dragging || cam.panning;
+
+        glBindBuffer(GL_UNIFORM_BUFFER, cameraUBO);
+        glBufferSubData(GL_UNIFORM_BUFFER, 0, sizeof(UBOData), &data); // pass UBOData to the shader
+    }
+
+    void uploadDiskUBO()
+    {
+        // disk
+        float r1 = BH.r_s * 2.2f; // inner radius just outside the event horizon
+        float r2 = BH.r_s * 5.2f; // outer radius of the disk
+        float num = 2.0;          // number of rays
+        float thickness = 1e9f;   // padding for std140 alignment
+        float diskData[4] = {r1, r2, num, thickness};
+
+        glBindBuffer(GL_UNIFORM_BUFFER, diskUBO);
+        glBufferSubData(GL_UNIFORM_BUFFER, 0, sizeof(diskData), diskData);
+    }
+
+    void uploadObjectsUBO(const std::vector<ObjectData> &objs)
+    {
+        // 16B align
+        struct UBOData
+        {
+            int numObjects;
+            float objPad0, objPad1, objPad2; // <-- pad out to 16 bytes
+            glm::vec4 posRadius[16];
+            glm::vec4 color[16];
+            float mass[16];
+        } data;
+
+        // Maxium objects: 16
+        size_t count = std::min(objs.size(), size_t(16));
+        data.numObjects = static_cast<int>(count);
+
+        for (size_t i = 0; i < count; ++i)
+        {
+            data.posRadius[i] = objs[i].posRadius;
+            data.color[i] = objs[i].color;
+            data.mass[i] = objs[i].mass;
+        }
+
+        glBindBuffer(GL_UNIFORM_BUFFER, objectsUBO);
+        glBufferSubData(GL_UNIFORM_BUFFER, 0, sizeof(data), &data);
+    }
+
+    /// Creates the fullscreen quad geometry and an RGBA texture sized to the viewport.
     std::vector<GLuint> QuadVAO()
     {
         float quadVertices[] = {
@@ -461,6 +558,7 @@ public:
 
         return VAOtexture;
     }
+    /// Draws the fullscreen quad using the current texture bound to the shader.
     void drawFullScreenQuad()
     {
         glUseProgram(shaderProgram);
@@ -475,6 +573,7 @@ public:
         glEnable(GL_DEPTH_TEST);
     }
 
+    /// Runs the compute shader to fill the render texture sized to the current viewport.
     void dispatchCompute(const Camera &cam)
     {
         // determine target compute‐res
@@ -485,21 +584,23 @@ public:
 
         // 1. reallocate the texture if needed
         glBindTexture(GL_TEXTURE_2D, texture);
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA16F, cw, ch, 0, GL_RGBA, GL_HALF_FLOAT, nullptr);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA32F, cw, ch, 0, GL_RGBA, GL_FLOAT, nullptr);
 
-        // TODO 2. Bind UBOs
+        // 2. Bind UBOs
         glUseProgram(computeProgram);
+        uploadCameraUBO(cam);
+        uploadDiskUBO();
+        uploadObjectsUBO(objects);
 
-        // 把纹理作为 image0 供 compute 写入
-        glBindImageTexture(0, texture, 0, GL_FALSE, 0,
-                           GL_WRITE_ONLY, GL_RGBA16F);
+        // 3. Bind texture as image0
+        glBindImageTexture(0, texture, 0, GL_FALSE, 0, GL_WRITE_ONLY, GL_RGBA32F);
 
-        // 计算工作组数（local size = 16x16）
+        // 4. Dispatch grid (work groups)
         GLuint groupsX = (GLuint)std::ceil(cw / 16.0f);
         GLuint groupsY = (GLuint)std::ceil(ch / 16.0f);
         glDispatchCompute(groupsX, groupsY, 1);
 
-        // 同步，确保写完再被采样
+        // 5. Sync
         glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT);
     }
 
@@ -546,8 +647,6 @@ int main(int, char **)
     glViewport(0, 0, engine.WIDTH, engine.HEIGHT);
     glClearColor(0, 0, 0, 1);
     glClear(GL_COLOR_BUFFER_BIT);
-    // engine.dispatchCompute(camera);
-    // engine.drawFullScreenQuad();
 
     while (!glfwWindowShouldClose(engine.window))
     {
