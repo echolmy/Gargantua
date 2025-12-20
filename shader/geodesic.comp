@@ -138,14 +138,36 @@ void rk4Step(inout Ray ray, float dL) {
     ray.z = ray.r * cos(ray.theta);
 }
 
-bool crossesDiskPlane(vec3 p0, vec3 p1, out vec3 hit) {
-    float d0 = p0.y;
-    float d1 = p1.y;
-    if (d0 * d1 > 0.0) return false;
-    float t = d0 / (d0 - d1);
-    hit = mix(p0, p1, t);
-    float r = length(vec2(hit.x, hit.z));
-    return r >= disk.r1 && r <= disk.r2;
+bool intersectsDiskSlab(vec3 p0, vec3 p1, float halfH, out float segLen, out float rcyl) {
+    float y0 = p0.y;
+    float y1 = p1.y;
+    float dy = y1 - y0;
+    float tEnter = 0.0;
+    float tExit = 1.0;
+
+    if (abs(dy) < 1e-8) {
+        if (abs(y0) > halfH) return false;
+    } else {
+        float t0 = (-halfH - y0) / dy;
+        float t1 = ( halfH - y0) / dy;
+        tEnter = min(t0, t1);
+        tExit  = max(t0, t1);
+        tEnter = clamp(tEnter, 0.0, 1.0);
+        tExit  = clamp(tExit, 0.0, 1.0);
+        if (tExit <= tEnter) return false;
+    }
+
+    vec3 mid = mix(p0, p1, 0.5 * (tEnter + tExit));
+    rcyl = length(vec2(mid.x, mid.z));
+    if (rcyl < disk.r1 || rcyl > disk.r2) return false;
+
+    float edgeIn = smoothstep(disk.r1, disk.r1 * 1.02, rcyl);
+    float edgeOut = 1.0 - smoothstep(disk.r2 * 0.98, disk.r2, rcyl);
+    if (edgeIn * edgeOut <= 0.0) return false;
+
+    float segment = length(p1 - p0);
+    segLen = (tExit - tEnter) * segment;
+    return segLen > 0.0;
 }
 
 
@@ -240,13 +262,12 @@ void main() {
 
     vec4 color = vec4(0.0);
     vec3 prevPos = vec3(ray.x, ray.y, ray.z);
-    vec3 diskHit = vec3(0.0);
     vec3 diskAccum = vec3(0.0);
+    float accumAlpha = 0.0;
     float lambda = 0.0;
 
     // Check hit event
     bool hitBlackHole = false;
-    int diskHits = 0;
     bool hitObject = false;
 
     int steps = 20000;
@@ -260,11 +281,11 @@ void main() {
         lambda += D_LAMBDA;
 
         vec3 newPos = vec3(ray.x, ray.y, ray.z);
-        if (crossesDiskPlane(prevPos, newPos, diskHit)){
-            // 1. disk radius (cylindrical)
-            float rcyl = length(vec2(diskHit.x, diskHit.z));
-
-            // 2. temperature profile (thin disk)
+        float segLen = 0.0;
+        float rcyl = 0.0;
+        float halfH = disk.thickness * 0.5;
+        if (intersectsDiskSlab(prevPos, newPos, halfH, segLen, rcyl)){
+            // 1. temperature profile (thin disk)
             float rin = disk.r1;
             float T = diskTemperature(rcyl, rin, Tscale);
 
@@ -280,22 +301,44 @@ void main() {
                 g = 1.0 / max(ut - uphi * b, 1e-6);
             }
 
-            // 4. observed temperature -> color (linear RGB)
-            float Tobs = clamp(g * T, 1000.0, 40000.0);
+            // 4. Doppler beaming (approx) + observed temperature -> color (linear RGB)
+            vec3 midPos = (prevPos + newPos) * 0.5;
+            vec3 tangential = normalize(vec3(-midPos.z, 0.0, midPos.x));
+            vec3 kDir = normalize(prevPos - newPos); // direction toward camera
+            float M = 0.5 * rs;
+            float v = sqrt(M / max(rcyl, 1e-6));
+            float beta = clamp(v, 0.0, 0.5);
+            float gamma = inversesqrt(1.0 - beta * beta);
+            float cosang = clamp(dot(tangential, kDir), -1.0, 1.0);
+            float D = 1.0 / max(gamma * (1.0 - beta * cosang), 1e-6);
+            D = clamp(D, 0.6, 1.8);
+            float gTotal = g * mix(1.0, D, 0.6);
+            float Tobs = clamp(gTotal * T, 1000.0, 40000.0);
             vec3 chroma = temperatureToRGB(Tobs); // linear
 
-            // 5. brightness (HDR)
-            float intensity = pow(T / Tscale, 4.0) * pow(g, 3.0);
+            // 5. brightness (HDR) with tighter inner edge and stronger radial falloff
+            float rSpan = max(disk.r2 - disk.r1, 1e-6);
+            float rN = clamp((rcyl - disk.r1) / rSpan, 0.0, 1.0);
+            float edgeIn = smoothstep(disk.r1, disk.r1 * 1.02, rcyl);
+            float edgeOut = 1.0 - smoothstep(disk.r2 * 0.96, disk.r2, rcyl);
+            float edge = edgeIn * edgeOut;
+            float radial = pow(max(rcyl / disk.r1, 1.0), -2.6);
+            float innerBand = exp(-pow(rN / 0.18, 2.0));
+            float emissivity = edge * radial * (0.35 + 1.5 * innerBand) * pow(1.0 - rN, 1.0);
+            float intensity = pow(T / Tscale, 4.0) * pow(g, 3.0) * pow(D, 2.0) * emissivity;
             vec3 diskColor = chroma * intensity;
-
-            diskAccum += diskColor;
-            diskHits++;
-            if (diskHits >= 8) {
+            float h = clamp(abs(midPos.y) / max(halfH, 1.0), 0.0, 1.0);
+            float density = 1.0 - h * h;
+            float k = 4e-10; // absorption per meter (tuned for thinner disks)
+            float alpha = 1.0 - exp(-k * segLen * density);
+            diskAccum += (1.0 - accumAlpha) * diskColor * alpha;
+            accumAlpha += (1.0 - accumAlpha) * alpha;
+            if (accumAlpha >= 0.95) {
                 break;
             }
         }
         if (ray.r <= CAPTURE_R) {
-            if (diskHits == 0) {
+            if (accumAlpha <= 0.0) {
                 hitBlackHole = true;
             }
             break;
@@ -311,8 +354,8 @@ void main() {
     vec3 finalColor = vec3(0.0);
     if (hitBlackHole) {
         finalColor = vec3(0.0);
-    } else if (diskHits > 0) {
-        vec3 diskCol = diskAccum / float(diskHits);
+    } else if (accumAlpha > 0.0) {
+        vec3 diskCol = diskAccum / max(accumAlpha, 1e-6);
         float exposure = 8.0;           // 先试 4~20
         diskCol *= exposure;
         finalColor = diskCol;

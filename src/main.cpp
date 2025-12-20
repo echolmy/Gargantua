@@ -91,7 +91,7 @@ public:
     float minRadius = 1e10f, maxRadius = 1e12f;
 
     float azimuth = 0.0f;
-    float elevation = 1.6308f;
+    float elevation = 1.5808f;
 
     float orbitSpeed = 0.01f;
     float panSpeed = 0.01f;
@@ -122,7 +122,7 @@ public:
         target = glm::vec3(0.0f, 0.0f, 0.0f);
         moving = dragging || panning || scrolling;
         scrolling = false;
-        // std::cout << elevation << std::endl;
+        std::cout << elevation << std::endl;
     }
 
     void processMouseMove(double x, double y)
@@ -485,10 +485,10 @@ public:
     void uploadDiskUBO()
     {
         // disk
-        float r1 = BH.r_s * 3.0f; // inner radius of the disk
-        float r2 = BH.r_s * 5.2f; // outer radius of the disk
-        float num = 2.0;          // number of rays
-        float thickness = 1e7f;   // padding for std140 alignment
+        float r1 = BH.r_s * 3.0f;         // inner radius of the disk
+        float r2 = BH.r_s * 5.2f;         // outer radius of the disk
+        float num = 2.0;                  // number of rays
+        float thickness = BH.r_s * 0.06f; // thinner disk; bloom will add perceived thickness later
         float diskData[4] = {r1, r2, num, thickness};
 
         glBindBuffer(GL_UNIFORM_BUFFER, diskUBO);
