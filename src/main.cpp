@@ -485,8 +485,8 @@ public:
     void uploadDiskUBO()
     {
         // disk
-        float r1 = BH.r_s * 2.2f; // inner radius just outside the event horizon
-        float r2 = BH.r_s * 4.2f; // outer radius of the disk
+        float r1 = BH.r_s * 3.0f; // inner radius of the disk
+        float r2 = BH.r_s * 5.2f; // outer radius of the disk
         float num = 2.0;          // number of rays
         float thickness = 1e7f;   // padding for std140 alignment
         float diskData[4] = {r1, r2, num, thickness};
