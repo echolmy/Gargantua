@@ -87,15 +87,15 @@ class Camera
 public:
     // Center the camera orbit on the black hole at (0, 0, 0)
     glm::vec3 target = glm::vec3(0.0f, 0.0f, 0.0f); // Always look at the black hole center
-    float radius = 6.34194e10f;
+    float radius = 1.2e11f;
     float minRadius = 1e10f, maxRadius = 1e12f;
 
     float azimuth = 0.0f;
-    float elevation = glm::pi<float>() / 2.0f;
+    float elevation = 1.6308f;
 
     float orbitSpeed = 0.01f;
     float panSpeed = 0.01f;
-    double zoomSpeed = 25e9f;
+    double zoomSpeed = 5e9f;
 
     // Mouse operation
     bool dragging = false;
@@ -122,6 +122,7 @@ public:
         target = glm::vec3(0.0f, 0.0f, 0.0f);
         moving = dragging || panning || scrolling;
         scrolling = false;
+        // std::cout << elevation << std::endl;
     }
 
     void processMouseMove(double x, double y)
@@ -485,9 +486,9 @@ public:
     {
         // disk
         float r1 = BH.r_s * 2.2f; // inner radius just outside the event horizon
-        float r2 = BH.r_s * 5.2f; // outer radius of the disk
+        float r2 = BH.r_s * 4.2f; // outer radius of the disk
         float num = 2.0;          // number of rays
-        float thickness = 1e9f;   // padding for std140 alignment
+        float thickness = 1e7f;   // padding for std140 alignment
         float diskData[4] = {r1, r2, num, thickness};
 
         glBindBuffer(GL_UNIFORM_BUFFER, diskUBO);
@@ -565,6 +566,7 @@ public:
     /// Draws the fullscreen quad using the current texture bound to the shader.
     void drawFullScreenQuad()
     {
+        glEnable(GL_FRAMEBUFFER_SRGB);
         glUseProgram(shaderProgram);
         glBindVertexArray(quadVAO);
 
@@ -575,6 +577,7 @@ public:
         glDisable(GL_DEPTH_TEST);         // draw as background
         glDrawArrays(GL_TRIANGLES, 0, 6); // 2 triangles
         glEnable(GL_DEPTH_TEST);
+        glDisable(GL_FRAMEBUFFER_SRGB);
     }
 
     /// Runs the compute shader to fill the render texture sized to the current viewport.
