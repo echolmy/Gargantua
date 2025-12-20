@@ -1,4 +1,4 @@
-#version 430
+﻿#version 430
 layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
 layout(rgba32f, binding = 0) uniform writeonly image2D outImage;
 layout(std140, binding = 1) uniform Camera{
@@ -31,7 +31,7 @@ uniform samplerCube skybox;
 const float rs = 1.269e10;
 const float D_LAMBDA = 1e7;
 const double ESCAPE_R = 1e30;
-const float CAPTURE_R = rs * 1.5;
+const float CAPTURE_R = rs * 1.1;
 const float Tscale = 8000.0;
 
 struct Ray{
@@ -176,7 +176,7 @@ float diskTemperature(float rcyl, float rin, float Tscale)
     float x = max(rcyl / rin, 1.0001);
     float T_full = pow(x, -0.75) * pow(max(1.0 - inversesqrt(x), 0.0), 0.25);
     float T_pow  = pow(x, -0.75);
-    float mixK = 0.7; // 0=纯full(你现在), 1=纯幂律(更有梯度). 先试0.6~0.9
+    float mixK = 0.7; // 0=绾痜ull(浣犵幇鍦?, 1=绾箓寰?鏇存湁姊害). 鍏堣瘯0.6~0.9
     float shape = mix(T_full, T_pow, mixK);
     return Tscale * shape;
 }
@@ -223,7 +223,7 @@ vec3 temperatureToRGB(float kelvin)
         b = clamp(0.5432068 * log(y) - 1.1962541, 0.0, 1.0);
     }
 
-    // This fit outputs a display-like RGB (≈ sRGB). Convert to linear for HDR math.
+    // This fit outputs a display-like RGB (鈮?sRGB). Convert to linear for HDR math.
     vec3 srgb = vec3(r, g, b);
     return srgbToLinear(srgb);
 }
@@ -274,7 +274,9 @@ void main() {
 
     for (int i = 0; i < steps; ++i) {
         if (intercept(ray, rs)){
-            hitBlackHole = true;
+            if (accumAlpha <= 0.0) {
+                hitBlackHole = true;
+            }
             break;
         }
         rk4Step(ray, D_LAMBDA);
@@ -316,24 +318,26 @@ void main() {
             float Tobs = clamp(gTotal * T, 1000.0, 40000.0);
             vec3 chroma = temperatureToRGB(Tobs); // linear
 
-            // 5. brightness (HDR) with tighter inner edge and stronger radial falloff
+            // 5. brightness (HDR) with wider radial falloff
             float rSpan = max(disk.r2 - disk.r1, 1e-6);
             float rN = clamp((rcyl - disk.r1) / rSpan, 0.0, 1.0);
             float edgeIn = smoothstep(disk.r1, disk.r1 * 1.02, rcyl);
-            float edgeOut = 1.0 - smoothstep(disk.r2 * 0.96, disk.r2, rcyl);
+            float edgeOut = 1.0 - smoothstep(disk.r2 * 0.9, disk.r2, rcyl);
             float edge = edgeIn * edgeOut;
-            float radial = pow(max(rcyl / disk.r1, 1.0), -2.6);
-            float innerBand = exp(-pow(rN / 0.18, 2.0));
-            float emissivity = edge * radial * (0.35 + 1.5 * innerBand) * pow(1.0 - rN, 1.0);
+            float radial = pow(max(rcyl / disk.r1, 1.0), -1.6);
+            float innerBand = exp(-pow(rN / 0.35, 2.0));
+            float emissivity = edge * radial * (0.6 + 1.0 * innerBand) * pow(1.0 - rN, 0.5);
             float intensity = pow(T / Tscale, 4.0) * pow(g, 3.0) * pow(D, 2.0) * emissivity;
             vec3 diskColor = chroma * intensity;
             float h = clamp(abs(midPos.y) / max(halfH, 1.0), 0.0, 1.0);
             float density = 1.0 - h * h;
-            float k = 4e-10; // absorption per meter (tuned for thinner disks)
+            float k = 4e-10; // absorption per meter (base)
             float alpha = 1.0 - exp(-k * segLen * density);
+            float alphaScale = clamp(emissivity * 6.0, 0.0, 1.0);
+            alpha *= alphaScale;
             diskAccum += (1.0 - accumAlpha) * diskColor * alpha;
             accumAlpha += (1.0 - accumAlpha) * alpha;
-            if (accumAlpha >= 0.95) {
+            if (accumAlpha >= 0.995) {
                 break;
             }
         }
@@ -352,18 +356,20 @@ void main() {
 
     // Final color setting
     vec3 finalColor = vec3(0.0);
-    if (hitBlackHole) {
+    if (accumAlpha > 0.0) {
+        vec3 diskCol = diskAccum;
+        float exposure = 14.0;           // adjust for thicker, multi-ring disk
+        finalColor = diskCol * exposure + (1.0 - accumAlpha) * bg;
+    } else if (hitBlackHole) {
         finalColor = vec3(0.0);
-    } else if (accumAlpha > 0.0) {
-        vec3 diskCol = diskAccum / max(accumAlpha, 1e-6);
-        float exposure = 8.0;           // 先试 4~20
-        diskCol *= exposure;
-        finalColor = diskCol;
     } else {
         finalColor = bg;
     }
+
 
     finalColor = acesToneMap(finalColor);
     imageStore(outImage, pix, vec4(finalColor, 1.0));
 
 }
+
+

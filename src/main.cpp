@@ -485,10 +485,10 @@ public:
     void uploadDiskUBO()
     {
         // disk
-        float r1 = BH.r_s * 3.0f;         // inner radius of the disk
-        float r2 = BH.r_s * 5.2f;         // outer radius of the disk
-        float num = 2.0;                  // number of rays
-        float thickness = BH.r_s * 0.06f; // thinner disk; bloom will add perceived thickness later
+        float r1 = BH.r_s * 3.0f;        // inner radius of the disk
+        float r2 = BH.r_s * 10.0f;       // wider disk to expose lensed outer rings
+        float num = 2.0;                 // number of rays
+        float thickness = BH.r_s * 0.2f; // thicker disk for a broader lensed band
         float diskData[4] = {r1, r2, num, thickness};
 
         glBindBuffer(GL_UNIFORM_BUFFER, diskUBO);
