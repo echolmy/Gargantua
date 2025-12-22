@@ -122,7 +122,7 @@ public:
         target = glm::vec3(0.0f, 0.0f, 0.0f);
         moving = dragging || panning || scrolling;
         scrolling = false;
-        std::cout << elevation << std::endl;
+        // std::cout << elevation << std::endl;
     }
 
     void processMouseMove(double x, double y)
