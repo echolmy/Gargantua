@@ -1,5 +1,5 @@
 # Gargantua
-
+A physics-based black hole simulation implementing general relativistic geodesic integration for light and particle trajectories in curved spacetime. The project leverages GPU computation to simulate gravitational lensing and spacetime curvature.
 ## Screenshot
 ![Runtime screenshot](src/screenshot.png)
 
